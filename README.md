@@ -1,5 +1,10 @@
 # PointPillars
 
+**Alert: this repo is not well maintained.**
+
+Please feel free to contribute to make it better.
+---
+
 Welcome to PointPillars.
 
 This repo demonstrates how to reproduce the results from
