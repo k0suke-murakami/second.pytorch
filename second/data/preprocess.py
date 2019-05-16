@@ -80,7 +80,7 @@ def prep_pointcloud(input_dict,
                     bev_only=False,
                     use_group_id=False,
                     out_dtype=np.float32):
-    """convert point cloud to voxels, create targets if ground truths 
+    """convert point cloud to voxels, create targets if ground truths
     exists.
     """
     points = input_dict["points"]
@@ -233,6 +233,7 @@ def prep_pointcloud(input_dict,
     grid_size = voxel_generator.grid_size
     # [352, 400]
 
+    # max_voxels: maximum number of voxels
     voxels, coordinates, num_points = voxel_generator.generate(
         points, max_voxels)
 
@@ -357,4 +358,3 @@ def _read_and_prep_v9(info, root_path, num_point_features, prep_func):
     if "anchors_mask" in example:
         example["anchors_mask"] = example["anchors_mask"].astype(np.uint8)
     return example
-

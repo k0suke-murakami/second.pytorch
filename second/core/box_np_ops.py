@@ -32,7 +32,7 @@ def second_box_encode(boxes, anchors, encode_angle_to_vector=False, smooth_dim=F
     Args:
         boxes ([N, 7] Tensor): normal boxes: x, y, z, w, l, h, r
         anchors ([N, 7] Tensor): anchors
-        encode_angle_to_vector: bool. increase aos performance, 
+        encode_angle_to_vector: bool. increase aos performance,
             decrease other performance.
     """
     # need to convert boxes to z-center format
@@ -108,7 +108,7 @@ def bev_box_encode(boxes, anchors, encode_angle_to_vector=False, smooth_dim=Fals
     Args:
         boxes ([N, 7] Tensor): normal boxes: x, y, z, w, l, h, r
         anchors ([N, 7] Tensor): anchors
-        encode_angle_to_vector: bool. increase aos performance, 
+        encode_angle_to_vector: bool. increase aos performance,
             decrease other performance.
     """
     # need to convert boxes to z-center format
@@ -169,14 +169,14 @@ def bev_box_decode(box_encodings, anchors, encode_angle_to_vector=False, smooth_
 
 def corners_nd(dims, origin=0.5):
     """generate relative box corners based on length per dim and
-    origin point. 
-    
+    origin point.
+
     Args:
         dims (float array, shape=[N, ndim]): array of length per dim
         origin (list or array or float): origin point relate to smallest point.
-    
+
     Returns:
-        float array, shape=[N, 2 ** ndim, ndim]: returned corners. 
+        float array, shape=[N, 2 ** ndim, ndim]: returned corners.
         point layout example: (2d) x0y0, x0y1, x1y0, x1y1;
             (3d) x0y0z0, x0y0z1, x0y1z0, x0y1z1, x1y0z0, x1y0z1, x1y1z0, x1y1z1
             where x0 < x1, y0 < y1, z0 < z1
@@ -301,7 +301,7 @@ def rotation_points_single_angle(points, angle, axis=0):
 
 def rotation_2d(points, angles):
     """rotation 2d points based on origin point clockwise when angle positive.
-    
+
     Args:
         points (float array, shape=[N, point_size, 2]): points to be rotated.
         angles (float array, shape=[N]): rotation angle.
@@ -317,7 +317,7 @@ def rotation_2d(points, angles):
 
 def rotation_box(box_corners, angle):
     """rotation 2d points based on origin point clockwise when angle positive.
-    
+
     Args:
         points (float array, shape=[N, point_size, 2]): points to be rotated.
         angle (float): rotation angle.
@@ -338,7 +338,7 @@ def center_to_corner_box3d(centers,
                            origin=[0.5, 1.0, 0.5],
                            axis=1):
     """convert kitti locations, dimensions and angles to corners
-    
+
     Args:
         centers (float array, shape=[N, 3]): locations in kitti label file.
         dims (float array, shape=[N, 3]): dimensions in kitti label file.
@@ -363,12 +363,12 @@ def center_to_corner_box3d(centers,
 def center_to_corner_box2d(centers, dims, angles=None, origin=0.5):
     """convert kitti locations, dimensions and angles to corners.
     format: center(xy), dims(xy), angles(clockwise when positive)
-    
+
     Args:
         centers (float array, shape=[N, 2]): locations in kitti label file.
         dims (float array, shape=[N, 2]): dimensions in kitti label file.
         angles (float array, shape=[N]): rotation_y in kitti label file.
-    
+
     Returns:
         [type]: [description]
     """
@@ -652,7 +652,7 @@ def remove_outside_points(points, rect, Trv2c, P2, image_shape):
 
 @numba.jit(nopython=True)
 def iou_jit(boxes, query_boxes, eps=0.0):
-    """calculate box iou. note that jit version runs 2x faster than cython in 
+    """calculate box iou. note that jit version runs 2x faster than cython in
     my machine!
     Parameters
     ----------
@@ -702,9 +702,9 @@ def corner_to_surfaces_3d(corners):
     to surfaces that normal vectors all direct to internal.
 
     Args:
-        corners (float array, [N, 8, 3]): 3d box corners. 
+        corners (float array, [N, 8, 3]): 3d box corners.
     Returns:
-        surfaces (float array, [N, 6, 4, 3]): 
+        surfaces (float array, [N, 6, 4, 3]):
     """
     # box_corners: [N, 8, 3], must from corner functions in this module
     surfaces = np.array([
@@ -724,9 +724,9 @@ def corner_to_surfaces_3d_jit(corners):
     to surfaces that normal vectors all direct to internal.
 
     Args:
-        corners (float array, [N, 8, 3]): 3d box corners. 
+        corners (float array, [N, 8, 3]): 3d box corners.
     Returns:
-        surfaces (float array, [N, 6, 4, 3]): 
+        surfaces (float array, [N, 6, 4, 3]):
     """
     # box_corners: [N, 8, 3], must from corner functions in this module
     num_boxes = corners.shape[0]
@@ -755,7 +755,7 @@ def image_box_region_area(img_cumsum, bbox):
     Iabcd = ID-IB-IC+IA
     Args:
         img_cumsum: [M, H, W](yx) cumsumed image.
-        bbox: [N, 4](xyxy) bounding box, 
+        bbox: [N, 4](xyxy) bounding box,
     """
     N = bbox.shape[0]
     M = img_cumsum.shape[0]
@@ -843,7 +843,7 @@ def box3d_to_bbox(box3d, rect, Trv2c, P2):
     return bbox
 
 def assign_label_to_voxel(gt_boxes, coors, voxel_size, coors_range):
-    """assign a 0/1 label to each voxel based on whether 
+    """assign a 0/1 label to each voxel based on whether
     the center of voxel is in gt_box. LIDAR.
     """
     voxel_size = np.array(voxel_size, dtype=gt_boxes.dtype)

@@ -10,6 +10,7 @@ class VoxelGenerator:
                  max_voxels=20000):
         point_cloud_range = np.array(point_cloud_range, dtype=np.float32)
         # [0, -40, -3, 70.4, 40, 1]
+        # voxel_size: Dimension of voxels (x, y, z
         voxel_size = np.array(voxel_size, dtype=np.float32)
         grid_size = (
             point_cloud_range[3:] - point_cloud_range[:3]) / voxel_size

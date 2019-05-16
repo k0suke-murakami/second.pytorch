@@ -22,6 +22,8 @@ from second.pytorch.builder import (box_coder_builder, input_reader_builder,
 from second.utils.eval import get_coco_eval_result, get_official_eval_result
 from second.utils.progress_bar import ProgressBar
 
+from second.pytorch.utils import get_paddings_indicator
+
 
 def _get_pos_neg_loss(cls_loss, labels):
     # cls_loss: [N, num_anchors, num_class]
@@ -130,7 +132,8 @@ def train(config_path,
     # BUILD NET
     ######################
     center_limit_range = model_cfg.post_center_limit_range
-    net = second_builder.build(model_cfg, voxel_generator, target_assigner)
+    # net = second_builder.build(model_cfg, voxel_generator, target_assigner)
+    net = second_builder.build(model_cfg, voxel_generator, target_assigner, input_cfg.batch_size)
     net.cuda()
     # net_train = torch.nn.DataParallel(net).cuda()
     print("num_trainable parameters:", len(list(net.parameters())))
@@ -244,20 +247,92 @@ def train(config_path,
 
                 batch_size = example["anchors"].shape[0]
 
-                ret_dict = net(example_torch)
+                example_tuple = list(example_torch.values())
+                example_tuple[11] = torch.from_numpy(example_tuple[11])
+                example_tuple[12] = torch.from_numpy(example_tuple[12])
+                assert 13==len(example_tuple), "something wring with training input size!"
+                # training example:[0:'voxels', 1:'num_points', 2:'coordinates', 3:'rect',
+                # 4:'Trv2c', 5:'P2',
+                # 6:'anchors', 7:'anchors_mask', 8:'labels', 9:'reg_targets', 10:'reg_weights',
+                # 11:'image_idx', 12:'image_shape']
+                # ret_dict = net(example_torch)
 
-                # box_preds = ret_dict["box_preds"]
-                cls_preds = ret_dict["cls_preds"]
-                loss = ret_dict["loss"].mean()
-                cls_loss_reduced = ret_dict["cls_loss_reduced"].mean()
-                loc_loss_reduced = ret_dict["loc_loss_reduced"].mean()
-                cls_pos_loss = ret_dict["cls_pos_loss"]
-                cls_neg_loss = ret_dict["cls_neg_loss"]
-                loc_loss = ret_dict["loc_loss"]
-                cls_loss = ret_dict["cls_loss"]
-                dir_loss_reduced = ret_dict["dir_loss_reduced"]
-                cared = ret_dict["cared"]
-                labels = example_torch["labels"]
+                # training input from example
+                # print("example[0] size", example_tuple[0].size())
+                pillar_x = example_tuple[0][:,:,0].unsqueeze(0).unsqueeze(0)
+                pillar_y = example_tuple[0][:,:,1].unsqueeze(0).unsqueeze(0)
+                pillar_z = example_tuple[0][:,:,2].unsqueeze(0).unsqueeze(0)
+                pillar_i = example_tuple[0][:,:,3].unsqueeze(0).unsqueeze(0)
+                num_points_per_pillar = example_tuple[1].float().unsqueeze(0)
+
+                # Find distance of x, y, and z from pillar center
+                # assuming xyres_16.proto
+                coors_x = example_tuple[2][:, 3].float()
+                coors_y = example_tuple[2][:, 2].float()
+                # self.x_offset = self.vx / 2 + pc_range[0]
+                # self.y_offset = self.vy / 2 + pc_range[1]
+                # this assumes xyres 20
+                # x_sub = coors_x.unsqueeze(1) * 0.16 + 0.1
+                # y_sub = coors_y.unsqueeze(1) * 0.16 + -39.9
+                # here assumes xyres 16
+                x_sub = coors_x.unsqueeze(1) * 0.16 + 0.08
+                y_sub = coors_y.unsqueeze(1) * 0.16 + -39.6
+                ones = torch.ones([1, 100],dtype=torch.float32, device=pillar_x.device )
+                x_sub_shaped = torch.mm(x_sub, ones).unsqueeze(0).unsqueeze(0)
+                y_sub_shaped = torch.mm(y_sub, ones).unsqueeze(0).unsqueeze(0)
+
+                num_points_for_a_pillar = pillar_x.size()[3]
+                mask = get_paddings_indicator(num_points_per_pillar, num_points_for_a_pillar, axis=0)
+                mask = mask.permute(0, 2, 1)
+                mask = mask.unsqueeze(1)
+                mask = mask.type_as(pillar_x)
+
+                coors   = example_tuple[2]
+                anchors = example_tuple[6]
+                labels  = example_tuple[8]
+                reg_targets = example_tuple[9]
+
+                input = [pillar_x, pillar_y, pillar_z, pillar_i,
+                         num_points_per_pillar, x_sub_shaped, y_sub_shaped, mask, coors,
+                         anchors, labels, reg_targets]
+
+                ret_dict = net(input)
+                assert 10==len(ret_dict), "something wring with training output size!"
+                # return 0
+                # ret_dict {
+                #     0:"loss": loss,
+                #     1:"cls_loss": cls_loss,
+                #     2:"loc_loss": loc_loss,
+                #     3:"cls_pos_loss": cls_pos_loss,
+                #     4:"cls_neg_loss": cls_neg_loss,
+                #     5:"cls_preds": cls_preds,
+                #     6:"dir_loss_reduced": dir_loss_reduced,
+                #     7:"cls_loss_reduced": cls_loss_reduced,
+                #     8:"loc_loss_reduced": loc_loss_reduced,
+                #     9:"cared": cared,
+                # }
+                # cls_preds = ret_dict["cls_preds"]
+                cls_preds = ret_dict[5]
+                # loss = ret_dict["loss"].mean()
+                loss = ret_dict[0].mean()
+                # cls_loss_reduced = ret_dict["cls_loss_reduced"].mean()
+                cls_loss_reduced = ret_dict[7].mean()
+                # loc_loss_reduced = ret_dict["loc_loss_reduced"].mean()
+                loc_loss_reduced = ret_dict[8].mean()
+                # cls_pos_loss = ret_dict["cls_pos_loss"]
+                cls_pos_loss = ret_dict[3]
+                # cls_neg_loss = ret_dict["cls_neg_loss"]
+                cls_neg_loss = ret_dict[4]
+                # loc_loss = ret_dict["loc_loss"]
+                loc_loss = ret_dict[2]
+                # cls_loss = ret_dict["cls_loss"]
+                cls_loss = ret_dict[1]
+                # dir_loss_reduced = ret_dict["dir_loss_reduced"]
+                dir_loss_reduced = ret_dict[6]
+                # cared = ret_dict["cared"]
+                cared = ret_dict[9]
+                # labels = example_torch["labels"]
+                labels = example_tuple[8]
                 if train_cfg.enable_mixed_precision:
                     loss *= loss_scale
                 loss.backward()
@@ -274,10 +349,11 @@ def train(config_path,
                 metrics = {}
                 num_pos = int((labels > 0)[0].float().sum().cpu().numpy())
                 num_neg = int((labels == 0)[0].float().sum().cpu().numpy())
-                if 'anchors_mask' not in example_torch:
-                    num_anchors = example_torch['anchors'].shape[1]
-                else:
-                    num_anchors = int(example_torch['anchors_mask'][0].sum())
+                # if 'anchors_mask' not in example_torch:
+                #     num_anchors = example_torch['anchors'].shape[1]
+                # else:
+                #     num_anchors = int(example_torch['anchors_mask'][0].sum())
+                num_anchors = int(example_tuple[7][0].sum())
                 global_step = net.get_global_step()
                 if global_step % display_step == 0:
                     loc_loss_elem = [
@@ -299,13 +375,15 @@ def train(config_path,
                     if model_cfg.use_direction_classifier:
                         metrics["loss"]["dir_rt"] = float(
                             dir_loss_reduced.detach().cpu().numpy())
-                    metrics["num_vox"] = int(example_torch["voxels"].shape[0])
+                    # metrics["num_vox"] = int(example_torch["voxels"].shape[0])
+                    metrics["num_vox"] = int(example_tuple[0].shape[0])
                     metrics["num_pos"] = int(num_pos)
                     metrics["num_neg"] = int(num_neg)
                     metrics["num_anchors"] = int(num_anchors)
                     metrics["lr"] = float(
                         mixed_optimizer.param_groups[0]['lr'])
-                    metrics["image_idx"] = example['image_idx'][0]
+                    # metrics["image_idx"] = example['image_idx'][0]
+                    metrics["image_idx"] = example_tuple[11][0]
                     flatted_metrics = flat_nested_json_dict(metrics)
                     flatted_summarys = flat_nested_json_dict(metrics, "/")
                     for k, v in flatted_summarys.items():
@@ -341,72 +419,78 @@ def train(config_path,
             # Ensure that all evaluation points are saved forever
             torchplus.train.save_models(eval_checkpoint_dir, [net, optimizer], net.get_global_step(), max_to_keep=100)
 
-            net.eval()
-            result_path_step = result_path / f"step_{net.get_global_step()}"
-            result_path_step.mkdir(parents=True, exist_ok=True)
-            print("#################################")
-            print("#################################", file=logf)
-            print("# EVAL")
-            print("# EVAL", file=logf)
-            print("#################################")
-            print("#################################", file=logf)
-            print("Generate output labels...")
-            print("Generate output labels...", file=logf)
-            t = time.time()
-            dt_annos = []
-            prog_bar = ProgressBar()
-            prog_bar.start(len(eval_dataset) // eval_input_cfg.batch_size + 1)
-            for example in iter(eval_dataloader):
-                example = example_convert_to_torch(example, float_dtype)
-                if pickle_result:
-                    dt_annos += predict_kitti_to_anno(
-                        net, example, class_names, center_limit_range,
-                        model_cfg.lidar_input)
-                else:
-                    _predict_kitti_to_file(net, example, result_path_step,
-                                           class_names, center_limit_range,
-                                           model_cfg.lidar_input)
-
-                prog_bar.print_bar()
-
-            sec_per_ex = len(eval_dataset) / (time.time() - t)
-            print(f"avg forward time per example: {net.avg_forward_time:.3f}")
-            print(
-                f"avg postprocess time per example: {net.avg_postprocess_time:.3f}"
-            )
-
-            net.clear_time_metrics()
-            print(f'generate label finished({sec_per_ex:.2f}/s). start eval:')
-            print(
-                f'generate label finished({sec_per_ex:.2f}/s). start eval:',
-                file=logf)
-            gt_annos = [
-                info["annos"] for info in eval_dataset.dataset.kitti_infos
-            ]
-            if not pickle_result:
-                dt_annos = kitti.get_label_annos(result_path_step)
-            result, mAPbbox, mAPbev, mAP3d, mAPaos = get_official_eval_result(gt_annos, dt_annos, class_names,
-                                                                              return_data=True)
-            print(result, file=logf)
-            print(result)
-            writer.add_text('eval_result', result, global_step)
-
-            for i, class_name in enumerate(class_names):
-                writer.add_scalar('bev_ap:{}'.format(class_name), mAPbev[i, 1, 0], global_step)
-                writer.add_scalar('3d_ap:{}'.format(class_name), mAP3d[i, 1, 0], global_step)
-                writer.add_scalar('aos_ap:{}'.format(class_name), mAPaos[i, 1, 0], global_step)
-            writer.add_scalar('bev_map', np.mean(mAPbev[:, 1, 0]), global_step)
-            writer.add_scalar('3d_map', np.mean(mAP3d[:, 1, 0]), global_step)
-            writer.add_scalar('aos_map', np.mean(mAPaos[:, 1, 0]), global_step)
-
-            result = get_coco_eval_result(gt_annos, dt_annos, class_names)
-            print(result, file=logf)
-            print(result)
-            if pickle_result:
-                with open(result_path_step / "result.pkl", 'wb') as f:
-                    pickle.dump(dt_annos, f)
-            writer.add_text('eval_result', result, global_step)
-            net.train()
+            # net.eval()
+            # result_path_step = result_path / f"step_{net.get_global_step()}"
+            # result_path_step.mkdir(parents=True, exist_ok=True)
+            # print("#################################")
+            # print("#################################", file=logf)
+            # print("# EVAL")
+            # print("# EVAL", file=logf)
+            # print("#################################")
+            # print("#################################", file=logf)
+            # print("Generate output labels...")
+            # print("Generate output labels...", file=logf)
+            # t = time.time()
+            # dt_annos = []
+            # prog_bar = ProgressBar()
+            # prog_bar.start(len(eval_dataset) // eval_input_cfg.batch_size + 1)
+            # for example in iter(eval_dataloader):
+            #     example = example_convert_to_torch(example, float_dtype)
+            #     # evaluation example:[0:'voxels', 1:'num_points', 2:'coordinates', 3:'rect',
+            #     # 4:'Trv2c', 5:'P2',
+            #     # 6:'anchors', 7:'anchors_mask', 8:'image_idx', 9:'image_shape']
+            #     example_tuple = list(example.values())
+            #     example_tuple[8] = torch.from_numpy(example_tuple[8])
+            #     example_tuple[9] = torch.from_numpy(example_tuple[9])
+            #     if pickle_result:
+            #         dt_annos += predict_kitti_to_anno(
+            #             net, example_tuple, class_names, center_limit_range,
+            #             model_cfg.lidar_input)
+            #     else:
+            #         _predict_kitti_to_file(net, example, result_path_step,
+            #                                class_names, center_limit_range,
+            #                                model_cfg.lidar_input)
+            #
+            #     prog_bar.print_bar()
+            #
+            # sec_per_ex = len(eval_dataset) / (time.time() - t)
+            # print(f"avg forward time per example: {net.avg_forward_time:.3f}")
+            # print(
+            #     f"avg postprocess time per example: {net.avg_postprocess_time:.3f}"
+            # )
+            #
+            # net.clear_time_metrics()
+            # print(f'generate label finished({sec_per_ex:.2f}/s). start eval:')
+            # print(
+            #     f'generate label finished({sec_per_ex:.2f}/s). start eval:',
+            #     file=logf)
+            # gt_annos = [
+            #     info["annos"] for info in eval_dataset.dataset.kitti_infos
+            # ]
+            # if not pickle_result:
+            #     dt_annos = kitti.get_label_annos(result_path_step)
+            # result, mAPbbox, mAPbev, mAP3d, mAPaos = get_official_eval_result(gt_annos, dt_annos, class_names,
+            #                                                                   return_data=True)
+            # print(result, file=logf)
+            # print(result)
+            # writer.add_text('eval_result', result, global_step)
+            #
+            # for i, class_name in enumerate(class_names):
+            #     writer.add_scalar('bev_ap:{}'.format(class_name), mAPbev[i, 1, 0], global_step)
+            #     writer.add_scalar('3d_ap:{}'.format(class_name), mAP3d[i, 1, 0], global_step)
+            #     writer.add_scalar('aos_ap:{}'.format(class_name), mAPaos[i, 1, 0], global_step)
+            # writer.add_scalar('bev_map', np.mean(mAPbev[:, 1, 0]), global_step)
+            # writer.add_scalar('3d_map', np.mean(mAP3d[:, 1, 0]), global_step)
+            # writer.add_scalar('aos_map', np.mean(mAPaos[:, 1, 0]), global_step)
+            #
+            # result = get_coco_eval_result(gt_annos, dt_annos, class_names)
+            # print(result, file=logf)
+            # print(result)
+            # if pickle_result:
+            #     with open(result_path_step / "result.pkl", 'wb') as f:
+            #         pickle.dump(dt_annos, f)
+            # writer.add_text('eval_result', result, global_step)
+            # net.train()
     except Exception as e:
         torchplus.train.save_models(model_dir, [net, optimizer],
                                     net.get_global_step())
@@ -483,21 +567,76 @@ def predict_kitti_to_anno(net,
                           center_limit_range=None,
                           lidar_input=False,
                           global_set=None):
-    batch_image_shape = example['image_shape']
-    batch_imgidx = example['image_idx']
-    predictions_dicts = net(example)
-    # t = time.time()
+    # evaluation example:[0:'voxels', 1:'num_points', 2:'coordinates', 3:'rect',
+    # 4:'Trv2c', 5:'P2',
+    # 6:'anchors', 7:'anchors_mask', 8:'image_idx', 9:'image_shape']
+    # batch_image_shape = example['image_shape']
+    batch_image_shape = example[9]
+    batch_imgidx = example[8]
+
+    pillar_x = example[0][:,:,0].unsqueeze(0).unsqueeze(0)
+    pillar_y = example[0][:,:,1].unsqueeze(0).unsqueeze(0)
+    pillar_z = example[0][:,:,2].unsqueeze(0).unsqueeze(0)
+    pillar_i = example[0][:,:,3].unsqueeze(0).unsqueeze(0)
+    num_points_per_pillar = example[1].float().unsqueeze(0)
+
+    # Find distance of x, y, and z from pillar center
+    # assuming xyres_16.proto
+    coors_x = example[2][:, 3].float()
+    coors_y = example[2][:, 2].float()
+    x_sub = coors_x.unsqueeze(1) * 0.16 + 0.1
+    y_sub = coors_y.unsqueeze(1) * 0.16 + -39.9
+    ones = torch.ones([1, 100],dtype=torch.float32, device=pillar_x.device )
+    x_sub_shaped = torch.mm(x_sub, ones).unsqueeze(0).unsqueeze(0)
+    y_sub_shaped = torch.mm(y_sub, ones).unsqueeze(0).unsqueeze(0)
+
+    num_points_for_a_pillar = pillar_x.size()[3]
+    mask = get_paddings_indicator(num_points_per_pillar, num_points_for_a_pillar, axis=0)
+    mask = mask.permute(0, 2, 1)
+    mask = mask.unsqueeze(1)
+    mask = mask.type_as(pillar_x)
+
+    coors   = example[2]
+    anchors = example[6]
+    anchors_mask = example[7]
+    anchors_mask = torch.as_tensor(anchors_mask, dtype=torch.uint8, device=pillar_x.device)
+    anchors_mask = anchors_mask.byte()
+    rect = example[3]
+    Trv2c = example[4]
+    P2 = example[5]
+    image_idx = example[8]
+
+    input = [pillar_x, pillar_y, pillar_z, pillar_i,
+             num_points_per_pillar, x_sub_shaped, y_sub_shaped, mask, coors,
+             anchors, anchors_mask, rect, Trv2c, P2, image_idx]
+
+    predictions_dicts = net(input)
+    # predictions_dict = {
+    #     0:"bbox": box_2d_preds,
+    #     1:"box3d_camera": final_box_preds_camera,
+    #     2:"box3d_lidar": final_box_preds,
+    #     3:"scores": final_scores,
+    #     4:"label_preds": label_preds,
+    #     5:"image_idx": img_idx,
+    # }
     annos = []
     for i, preds_dict in enumerate(predictions_dicts):
         image_shape = batch_image_shape[i]
-        img_idx = preds_dict["image_idx"]
-        if preds_dict["bbox"] is not None:
-            box_2d_preds = preds_dict["bbox"].detach().cpu().numpy()
-            box_preds = preds_dict["box3d_camera"].detach().cpu().numpy()
-            scores = preds_dict["scores"].detach().cpu().numpy()
-            box_preds_lidar = preds_dict["box3d_lidar"].detach().cpu().numpy()
+        # img_idx = preds_dict["image_idx"]
+        img_idx = preds_dict[5]
+        # if preds_dict["bbox"] is not None:
+        if preds_dict[0] is not None:
+            # box_2d_preds = preds_dict["bbox"].detach().cpu().numpy()
+            box_2d_preds = preds_dict[0].detach().cpu().numpy()
+            # box_preds = preds_dict["box3d_camera"].detach().cpu().numpy()
+            box_preds = preds_dict[1].detach().cpu().numpy()
+            # scores = preds_dict["scores"].detach().cpu().numpy()
+            scores = preds_dict[3].detach().cpu().numpy()
+            # box_preds_lidar = preds_dict["box3d_lidar"].detach().cpu().numpy()
+            box_preds_lidar = preds_dict[2].detach().cpu().numpy()
             # write pred to file
-            label_preds = preds_dict["label_preds"].detach().cpu().numpy()
+            # label_preds = preds_dict["label_preds"].detach().cpu().numpy()
+            label_preds = preds_dict[4].detach().cpu().numpy()
             # label_preds = np.zeros([box_2d_preds.shape[0]], dtype=np.int32)
             anno = kitti.get_start_result_anno()
             num_example = 0
@@ -515,6 +654,7 @@ def predict_kitti_to_anno(net,
                     if (np.any(box_lidar[:3] < limit_range[:3])
                             or np.any(box_lidar[:3] > limit_range[3:])):
                         continue
+                image_shape = [image_shape[0], image_shape[1]]
                 bbox[2:] = np.minimum(bbox[2:], image_shape[::-1])
                 bbox[:2] = np.maximum(bbox[:2], [0, 0])
                 anno["name"].append(class_names[int(label)])
@@ -585,7 +725,8 @@ def evaluate(config_path,
     target_assigner = target_assigner_builder.build(target_assigner_cfg,
                                                     bv_range, box_coder)
 
-    net = second_builder.build(model_cfg, voxel_generator, target_assigner)
+    # net = second_builder.build(model_cfg, voxel_generator, target_assigner)
+    net = second_builder.build(model_cfg, voxel_generator, target_assigner, input_cfg.batch_size)
     net.cuda()
     if train_cfg.enable_mixed_precision:
         net.half()
@@ -627,11 +768,23 @@ def evaluate(config_path,
     bar.start(len(eval_dataset) // input_cfg.batch_size + 1)
 
     for example in iter(eval_dataloader):
+        # evaluation example:[0:'voxels', 1:'num_points', 2:'coordinates', 3:'rect',
+        # 4:'Trv2c', 5:'P2',
+        # 6:'anchors', 7:'anchors_mask', 8:'image_idx', 9:'image_shape']
         example = example_convert_to_torch(example, float_dtype)
+        example_tuple = list(example.values())
+        example_tuple[8] = torch.from_numpy(example_tuple[8])
+        example_tuple[9] = torch.from_numpy(example_tuple[9])
+
+        if(example_tuple[6].size()[0] != input_cfg.batch_size):
+           continue
+
         if pickle_result:
             dt_annos += predict_kitti_to_anno(
-                net, example, class_names, center_limit_range,
+                net, example_tuple, class_names, center_limit_range,
                 model_cfg.lidar_input, global_set)
+            # print("shut train/py L703")
+            # return 0
         else:
             _predict_kitti_to_file(net, example, result_path_step, class_names,
                                    center_limit_range, model_cfg.lidar_input)
@@ -644,6 +797,8 @@ def evaluate(config_path,
     print(f"avg postprocess time per example: {net.avg_postprocess_time:.3f}")
     if not predict_test:
         gt_annos = [info["annos"] for info in eval_dataset.dataset.kitti_infos]
+        if(len(gt_annos)%2 != 0):
+           del gt_annos[-1]
         if not pickle_result:
             dt_annos = kitti.get_label_annos(result_path_step)
         result = get_official_eval_result(gt_annos, dt_annos, class_names)
@@ -654,6 +809,188 @@ def evaluate(config_path,
             with open(result_path_step / "result.pkl", 'wb') as f:
                 pickle.dump(dt_annos, f)
 
+def prediction_once(net,
+                          example,
+                          class_names,
+                          batch_image_shape,
+                          center_limit_range=None,
+                          lidar_input=False,
+                          global_set=None):
+    # predictions_dicts = net(example)
+    # input_names = ['voxels', 'num_points', 'coordinates', 'rect', 'Trv2c', 'P2',
+    # 'anchors', 'anchors_mask', 'labels', 'image_idx', 'image_shape']
+
+
+    pillar_x = example[0][:,:,0].unsqueeze(0).unsqueeze(0)
+    pillar_y = example[0][:,:,1].unsqueeze(0).unsqueeze(0)
+    pillar_z = example[0][:,:,2].unsqueeze(0).unsqueeze(0)
+    pillar_i = example[0][:,:,3].unsqueeze(0).unsqueeze(0)
+    num_points_per_pillar = example[1].float().unsqueeze(0)
+
+    # Find distance of x, y, and z from pillar center
+    # assuming xyres_16.proto
+    coors_x = example[2][:, 3].float()
+    coors_y = example[2][:, 2].float()
+    x_sub = coors_x.unsqueeze(1) * 0.16 + 0.1
+    y_sub = coors_y.unsqueeze(1) * 0.16 + -39.9
+    ones = torch.ones([1, 100],dtype=torch.float32, device=pillar_x.device )
+    x_sub_shaped = torch.mm(x_sub, ones).unsqueeze(0).unsqueeze(0)
+    y_sub_shaped = torch.mm(y_sub, ones).unsqueeze(0).unsqueeze(0)
+
+    num_points_for_a_pillar = pillar_x.size()[3]
+    mask = get_paddings_indicator(num_points_per_pillar, num_points_for_a_pillar, axis=0)
+    mask = mask.permute(0, 2, 1)
+    mask = mask.unsqueeze(1)
+    mask = mask.type_as(pillar_x)
+
+    coors = example[2]
+
+    print(pillar_x.size())
+    print(pillar_y.size())
+    print(pillar_z.size())
+    print(pillar_i.size())
+    print(num_points_per_pillar.size())
+    print(x_sub_shaped.size())
+    print(y_sub_shaped.size())
+    print(mask.size())
+
+    # input = [pillar_x, pillar_y, pillar_z, pillar_i, num_points_per_pillar, x_sub_shaped, y_sub_shaped, mask, coors]
+    # predictions_dicts = net(input)
+    # return 0
+
+    input_names = ["pillar_x", "pillar_y", "pillar_z", "pillar_i", "num_points_per_pillar", "x_sub_shaped", "y_sub_shaped", "mask"]
+    # input_names = ["pillar_x", "pillar_y", "pillar_z"]
+
+    # pillar_x = torch.ones([1, 8599, 100, 1],dtype=torch.float32, device=pillar_x.device )
+    # pillar_y = torch.ones([1, 8599, 100, 1],dtype=torch.float32, device=pillar_x.device )
+    # pillar_z = torch.ones([1, 8599, 100, 1],dtype=torch.float32, device=pillar_x.device )
+    # pillar_i = torch.ones([1, 8599, 100, 1],dtype=torch.float32, device=pillar_x.device )
+    # num_points_per_pillar = torch.ones([1, 8599],dtype=torch.float32, device=pillar_x.device )
+    # x_sub_shaped = torch.ones([1, 8599, 100, 1],dtype=torch.float32, device=pillar_x.device )
+    # y_sub_shaped = torch.ones([1, 8599, 100, 1],dtype=torch.float32, device=pillar_x.device )
+    # mask = torch.ones([1, 8599, 100, 1],dtype=torch.float32, device=pillar_x.device )
+
+    # wierd conv
+    pillar_x = torch.ones([1, 1, 12000, 100],dtype=torch.float32, device=pillar_x.device )
+    pillar_y = torch.ones([1, 1, 12000, 100],dtype=torch.float32, device=pillar_x.device )
+    pillar_z = torch.ones([1, 1, 12000, 100],dtype=torch.float32, device=pillar_x.device )
+    pillar_i = torch.ones([1, 1, 12000, 100],dtype=torch.float32, device=pillar_x.device )
+    num_points_per_pillar = torch.ones([1, 12000],dtype=torch.float32, device=pillar_x.device )
+    x_sub_shaped = torch.ones([1, 1, 12000, 100],dtype=torch.float32, device=pillar_x.device )
+    y_sub_shaped = torch.ones([1, 1, 12000, 100],dtype=torch.float32, device=pillar_x.device )
+    mask = torch.ones([1, 1, 12000, 100],dtype=torch.float32, device=pillar_x.device )
+
+    # deconv
+    # pillar_x = torch.ones([1, 100, 8599, 1],dtype=torch.float32, device=pillar_x.device )
+    # pillar_y = torch.ones([1, 100, 8599, 1],dtype=torch.float32, device=pillar_x.device )
+    # pillar_z = torch.ones([1, 100, 8599, 1],dtype=torch.float32, device=pillar_x.device )
+    # pillar_i = torch.ones([1, 100, 8599, 1],dtype=torch.float32, device=pillar_x.device )
+    # num_points_per_pillar = torch.ones([1, 8599],dtype=torch.float32, device=pillar_x.device )
+    # x_sub_shaped = torch.ones([1, 100,8599, 1],dtype=torch.float32, device=pillar_x.device )
+    # y_sub_shaped = torch.ones([1, 100,8599, 1],dtype=torch.float32, device=pillar_x.device )
+    # mask = torch.ones([1, 100, 8599, 1],dtype=torch.float32, device=pillar_x.device )
+
+    example1 = [pillar_x, pillar_y, pillar_z, pillar_i, num_points_per_pillar, x_sub_shaped, y_sub_shaped, mask]
+    # example1 = [pillar_x, pillar_y, pillar_z]
+    # example1 = [pillar_x, pillar_y, pillar_z, pillar_i, num_points, mask]
+    torch.onnx.export(net, example1, "pp.onnx", verbose=False, input_names = input_names)
+
+    sp_f = torch.ones([1, 64, 496, 432],dtype=torch.float32, device=pillar_x.device )
+    torch.onnx.export(net.rpn, sp_f, "rpn.onnx", verbose=False)
+    return 0
+
+def inference(config_path,
+             model_dir,
+             result_path=None,
+             predict_test=False,
+             ckpt_path=None,
+             ref_detfile=None):
+    model_dir = pathlib.Path(model_dir)
+    if predict_test:
+        result_name = 'predict_test'
+    else:
+        result_name = 'eval_results'
+    if result_path is None:
+        result_path = model_dir / result_name
+    else:
+        result_path = pathlib.Path(result_path)
+    config = pipeline_pb2.TrainEvalPipelineConfig()
+    with open(config_path, "r") as f:
+        proto_str = f.read()
+        text_format.Merge(proto_str, config)
+
+    input_cfg = config.eval_input_reader
+    model_cfg = config.model.second
+    train_cfg = config.train_config
+    class_names = list(input_cfg.class_names)
+    center_limit_range = model_cfg.post_center_limit_range
+    ######################
+    # BUILD VOXEL GENERATOR
+    ######################
+    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
+    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
+    box_coder = box_coder_builder.build(model_cfg.box_coder)
+    target_assigner_cfg = model_cfg.target_assigner
+    target_assigner = target_assigner_builder.build(target_assigner_cfg,
+                                                    bv_range, box_coder)
+
+    # net = second_builder.build(model_cfg, voxel_generator, target_assigner)
+    batch_size = 1
+    num_worker = 1
+    net = second_builder.build(model_cfg, voxel_generator, target_assigner, 1)
+    net.cuda()
+    if train_cfg.enable_mixed_precision:
+        net.half()
+        net.metrics_to_float()
+        net.convert_norm_to_float(net)
+
+    if ckpt_path is None:
+        torchplus.train.try_restore_latest_checkpoints(model_dir, [net])
+    else:
+        torchplus.train.restore(ckpt_path, net)
+
+    eval_dataset = input_reader_builder.build(
+        input_cfg,
+        model_cfg,
+        training=False,
+        voxel_generator=voxel_generator,
+        target_assigner=target_assigner)
+    eval_dataloader = torch.utils.data.DataLoader(
+        eval_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=1,
+        pin_memory=False,
+        collate_fn=merge_second_batch)
+
+    if train_cfg.enable_mixed_precision:
+        float_dtype = torch.float16
+    else:
+        float_dtype = torch.float32
+
+    net.eval()
+    result_path_step = result_path / f"step_{net.get_global_step()}"
+    result_path_step.mkdir(parents=True, exist_ok=True)
+    t = time.time()
+    dt_annos = []
+    global_set = None
+    print("Generate output labels...")
+    bar = ProgressBar()
+    bar.start(len(eval_dataset) // input_cfg.batch_size + 1)
+
+    for example in iter(eval_dataloader):
+        example = example_convert_to_torch(example, float_dtype)
+        example_tuple = list(example.values())
+        batch_image_shape = example_tuple[8]
+        example_tuple[8] = torch.from_numpy(example_tuple[8])
+        example_tuple[9] = torch.from_numpy(example_tuple[9])
+
+        # print("before", example)
+        dt_annos = prediction_once(
+            net, example_tuple, class_names, batch_image_shape, center_limit_range,
+            model_cfg.lidar_input, global_set)
+        return 0
+        bar.print_bar()
 
 if __name__ == '__main__':
     fire.Fire()

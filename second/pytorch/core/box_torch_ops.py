@@ -58,17 +58,50 @@ def second_box_decode(box_encodings, anchors, encode_angle_to_vector=False, smoo
         boxes ([N, 7] Tensor): normal boxes: x, y, z, w, l, h, r
         anchors ([N, 7] Tensor): anchors
     """
-    xa, ya, za, wa, la, ha, ra = torch.split(anchors, 1, dim=-1)
+    # xa, ya, za, wa, la, ha, ra = torch.split(anchors, 1, dim=-1)
+    # use select instead of split for onnx conversion
+    batch_size = box_encodings.size()[0]
+    xa = anchors.select(2,0)
+    xa = xa.view(batch_size, -1, 1 )
+    ya = anchors.select(2,1)
+    ya = ya.view(batch_size, -1, 1 )
+    za = anchors.select(2,2)
+    za = za.view(batch_size, -1, 1 )
+    wa = anchors.select(2,3)
+    wa = wa.view(batch_size, -1, 1 )
+    la = anchors.select(2,4)
+    la = la.view(batch_size, -1, 1 )
+    ha = anchors.select(2,5)
+    ha = ha.view(batch_size, -1, 1 )
+    ra = anchors.select(2,6)
+    ra = ra.view(batch_size, -1, 1 )
+
     if encode_angle_to_vector:
         xt, yt, zt, wt, lt, ht, rtx, rty = torch.split(
             box_encodings, 1, dim=-1)
-
+        print("Split is not for onnx conversion. \
+        You have to replace 'split' with 'select' operation")
     else:
         xt, yt, zt, wt, lt, ht, rt = torch.split(box_encodings, 1, dim=-1)
-
+        # use select instead of split for onnx conversion
+        xt = box_encodings.select(2,0)
+        xt = xt.view(batch_size, -1, 1 )
+        yt = box_encodings.select(2,1)
+        yt = yt.view(batch_size, -1, 1 )
+        zt = box_encodings.select(2,2)
+        zt = zt.view(batch_size, -1, 1 )
+        wt = box_encodings.select(2,3)
+        wt = wt.view(batch_size, -1, 1 )
+        lt = box_encodings.select(2,4)
+        lt = lt.view(batch_size, -1, 1 )
+        ht = box_encodings.select(2,5)
+        ht = ht.view(batch_size, -1, 1 )
+        rt = box_encodings.select(2,6)
+        rt = rt.view(batch_size, -1, 1 )
     # xt, yt, zt, wt, lt, ht, rt = torch.split(box_encodings, 1, dim=-1)
     za = za + ha / 2
     diagonal = torch.sqrt(la**2 + wa**2)
+    # print(xt.size(), diagonal.size(), xa.size())
     xg = xt * diagonal + xa
     yg = yt * diagonal + ya
     zg = zt * ha + za
@@ -162,15 +195,15 @@ def bev_box_decode(box_encodings, anchors, encode_angle_to_vector=False, smooth_
 
 def corners_nd(dims, origin=0.5):
     """generate relative box corners based on length per dim and
-    origin point. 
-    
+    origin point.
+
     Args:
         dims (float array, shape=[N, ndim]): array of length per dim
         origin (list or array or float): origin point relate to smallest point.
-        dtype (output dtype, optional): Defaults to np.float32 
-    
+        dtype (output dtype, optional): Defaults to np.float32
+
     Returns:
-        float array, shape=[N, 2 ** ndim, ndim]: returned corners. 
+        float array, shape=[N, 2 ** ndim, ndim]: returned corners.
         point layout example: (2d) x0y0, x0y1, x1y0, x1y1;
             (3d) x0y0z0, x0y0z1, x0y1z0, x0y1z1, x1y0z0, x1y0z1, x1y1z0, x1y1z1
             where x0 < x1, y0 < y1, z0 < z1
@@ -200,14 +233,14 @@ def corners_nd(dims, origin=0.5):
 def corners_2d(dims, origin=0.5):
     """generate relative 2d box corners based on length per dim and
     origin point.
-    
+
     Args:
         dims (float array, shape=[N, 2]): array of length per dim
         origin (list or array or float): origin point relate to smallest point.
-        dtype (output dtype, optional): Defaults to np.float32 
-    
+        dtype (output dtype, optional): Defaults to np.float32
+
     Returns:
-        float array, shape=[N, 4, 2]: returned corners. 
+        float array, shape=[N, 4, 2]: returned corners.
         point layout: x0y0, x0y1, x1y1, x1y0
     """
     return corners_nd(dims, origin)
@@ -284,7 +317,7 @@ def rotation_points_single_angle(points, angle, axis=0):
 
 def rotation_2d(points, angles):
     """rotation 2d points based on origin point clockwise when angle positive.
-    
+
     Args:
         points (float array, shape=[N, point_size, 2]): points to be rotated.
         angles (float array, shape=[N]): rotation angle.
@@ -306,7 +339,7 @@ def center_to_corner_box3d(centers,
                            origin=[0.5, 1.0, 0.5],
                            axis=1):
     """convert kitti locations, dimensions and angles to corners
-    
+
     Args:
         centers (float array, shape=[N, 3]): locations in kitti label file.
         dims (float array, shape=[N, 3]): dimensions in kitti label file.
@@ -329,12 +362,12 @@ def center_to_corner_box3d(centers,
 
 def center_to_corner_box2d(centers, dims, angles=None, origin=0.5):
     """convert kitti locations, dimensions and angles to corners
-    
+
     Args:
         centers (float array, shape=[N, 2]): locations in kitti label file.
         dims (float array, shape=[N, 2]): dimensions in kitti label file.
         angles (float array, shape=[N]): rotation_y in kitti label file.
-    
+
     Returns:
         [type]: [description]
     """
